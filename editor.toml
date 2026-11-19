@@ -91,6 +91,9 @@ display-condition = {fixed = false}
 [model.param-metadata.intersection_puzzle_fit]
 help-link = "https://github.com/yawkat/GridFlock/blob/main/README.md#connector-fit"
 display-condition = {js = "connector_intersection_puzzle"}
+[model.param-metadata.connector_symmetric]
+help-link = "https://github.com/yawkat/GridFlock/blob/main/README.md#symmetric-connectors"
+display-condition = {js = "connector_intersection_puzzle"}
 
 [model.tab-metadata."Edge Puzzle Connector"]
 control-boolean = "connector_edge_puzzle"
@@ -301,12 +304,16 @@ help-link = "https://github.com/yawkat/GridFlock/blob/main/README.md#depth"
 collapsed = true
 [model.param-metadata.x_segment_algorithm]
 help-link = "https://github.com/yawkat/GridFlock/blob/main/README.md#horizontal"
+[model.param-metadata.y_row_counts]
+help-link = "https://github.com/yawkat/GridFlock/blob/main/README.md#vertical"
 [model.param-metadata.y_row_count_first]
 help-link = "https://github.com/yawkat/GridFlock/blob/main/README.md#horizontal"
 [model.param-metadata.x_column_count_first]
 help-link = "https://github.com/yawkat/GridFlock/blob/main/README.md#vertical"
 [model.param-metadata.separate_edge_padding]
 help-link = "https://github.com/yawkat/GridFlock/blob/main/README.md#separate-edge-padding"
+[model.param-metadata.segment_number]
+help-link = "https://github.com/yawkat/GridFlock/blob/main/README.md#exporting-segments-separately"
 
 [model.tab-metadata."Stacked Print"]
 help-link = "https://github.com/yawkat/GridFlock/blob/main/README.md#stacked-print"

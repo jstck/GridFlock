@@ -13,3 +13,7 @@ paths/
 gridflock.json
 
 .idea/
+
+# generated Maximera baseplate pieces
+/6060/*.stl
+/8060/*.stl

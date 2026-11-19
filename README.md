@@ -25,6 +25,7 @@ For inserting magnets, check out [the jig](#jig).
   - [Connectors](#connectors)
     - [Intersection Puzzle](#intersection-puzzle)
       - [Connector Fit](#connector-fit)
+      - [Symmetric connectors](#symmetric-connectors)
     - [Edge Puzzle](#edge-puzzle)
       - [Connector Height](#connector-height)
       - [Connector Count](#connector-count)
@@ -95,6 +96,7 @@ For inserting magnets, check out [the jig](#jig).
     - [Horizontal](#horizontal)
     - [Vertical](#vertical)
     - [Separate edge padding](#separate-edge-padding)
+    - [Exporting segments separately](#exporting-segments-separately)
   - [Edge Adjustment](#edge-adjustment)
     - [Shifting the grid](#shifting-the-grid)
     - [Adding empty space](#adding-empty-space)
@@ -141,6 +143,19 @@ Loose fit example (`intersection_puzzle_fit=0`):
 <img src="docs/images/intersection-puzzle-loose.png" alt="Intersection puzzle (loose)" />
 
 You can find small grids with different fit values to calibrate [on printables](https://www.printables.com/model/1579487-gridflock-gridfinity-baseplate-generator/files).
+
+#### Symmetric connectors
+
+By default, the connectors on the north and east edges of each segment are male, and those on the south and west edges are female. This means that no two segments are identical, even if they have the same size.
+
+With `connector_symmetric` enabled, the connector directions are chosen so that the whole plate looks the same when rotated by 180°. Segments that are rotated copies of each other then become identical, so you only need to print half as many different pieces. Where the edge of one segment runs past the corners of two others (a T-junction), the connector there is male on the side of the segment that runs through. A connector that lies exactly at the center of the plate is left out, because it would have to be male and female at the same time.
+
+For this to work, the layout itself must be symmetric. Combine this with [`y_row_counts`](#vertical), which uses the reversed row counts for every other column. In this example, the two 4-row segments are identical, and so are the two 3-row segments:
+
+<!-- openscad -o docs/images/connector-symmetric.png --camera=0,0,0,0,0,90,700 -D plate_size='[168, 294]' -D bed_size='[100, 200]' -D magnets=false -D numbering=false -D connector_symmetric=true -D y_row_counts='[4, 3]' -->
+<img src="docs/images/connector-symmetric.png" alt="Symmetric connectors" />
+
+Symmetric connectors are only supported for the intersection puzzle connector, and cannot be combined with `separate_edge_padding`. The plate padding must also be symmetric (the default), or the outer segments will differ.
 
 ### Edge Puzzle
 
@@ -872,12 +887,25 @@ You can override the cell count for the first segment of each plan using the `y_
 <!-- openscad -o docs/images/segment-y-override.png --camera=0,0,0,40,0,10,600 -D plate_size='[84, 252]' -D bed_size='[50, 180]' -D magnets=false -D connector_intersection_puzzle=false -D y_row_count_first='[1, 1]' -->
 <img src="docs/images/segment-y-override.png" alt="Incremental segmentation alogirthm with cell count override (y splitting)" />
 
+For full control, you can instead set the row count of every segment with the `y_row_counts` property, listed from south to north. Even columns use these counts, and odd columns use them in reverse order, so as long as the list is not a palindrome, the segment corners are still staggered. The counts must add up to the number of rows in the plate. Here, `y_row_counts=[4, 3, 3]` produces columns of 4/3/3 and 3/3/4 rows:
+
+<!-- openscad -o docs/images/segment-y-row-counts.png --camera=0,0,0,30,0,90,750 -D plate_size='[168, 420]' -D bed_size='[100, 180]' -D magnets=false -D connector_intersection_puzzle=false -D y_row_counts='[4, 3, 3]' -->
+<img src="docs/images/segment-y-row-counts.png" alt="Explicit row counts (y splitting)" />
+
 ### Separate edge padding
 
 By default, positive edge padding is attached to the outer baseplate segments. Enable `separate_edge_padding` to generate positive edge padding as separate printable strips instead. The strips are planned as normal segments, so they include the connectors needed to attach them to the neighboring baseplate segments. Note that if the padding is small, connectors may not fully fit.
 
 <!-- openscad -o docs/images/separate-edge.png --camera=0,0,0,40,0,10,600 -D plate_size='[180, 180]' -D bed_size='[100, 100]' -D connector_intersection_puzzle=true -D separate_edge_padding=true -->
 <img src="docs/images/separate-edge.png" alt="Separate edge padding" />
+
+### Exporting segments separately
+
+By default, all segments are generated together in one model. To get one file per segment, set `segment_number` to the number of a segment (the same number that the `numbering` option embosses, starting at 1). Only that segment is generated, centered on the origin. For example, to export each segment of a plate with four segments to its own STL file:
+
+```sh
+for n in 1 2 3 4; do openscad -o segment-$n.stl -D segment_number=$n gridflock.scad; done
+```
 
 ## Edge Adjustment
 
