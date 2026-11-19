@@ -67,6 +67,8 @@ clickgroove_depth = 0.9; // .05
 connector_intersection_puzzle = true;
 // A value from 0 to 1 to modify the fit of the intersection puzzle connector. 0 is a loose fit, 1 is a tight fit.
 intersection_puzzle_fit = 1; // [0:0.1:1]
+// Choose the direction (male/female) of each intersection connector so that the plate is the same when rotated by 180°. Segments that are rotated copies of each other then become identical, so fewer different pieces need to be printed. Works best together with y_row_counts
+connector_symmetric = false;
 
 /* [Edge Puzzle Connector] */
 
@@ -226,10 +228,14 @@ thumbscrew_diameter = 15.8; // 0.1
 x_segment_algorithm = 0; // [0:Ideal, 1:Incremental]
 // In the y direction, segment sizes are determined by a simple algorithm that only resizes the first and last segments. The number of rows for the first segment alternate to avoid 4-way intersections. You can override the number of rows in the start segment for the odd and even columns with this property 
 y_row_count_first = [0, 0]; 
+// Explicit row counts for the segments of the even columns, from south to north, e.g. [6, 5, 5]. The odd columns use the same counts in reverse order. Must add up to the number of rows. Empty uses the automatic algorithm.
+y_row_counts = [];
 // If the 'incremental' x segment algorithm is chosen, this can be used to override the column count in the first segment.
 x_column_count_first = 0;
 // Generate positive edge padding as separate printable pieces instead of attaching it to the outer baseplate segments.
 separate_edge_padding = false;
+// Only generate the segment with this number (as embossed by the numbering option), centered on the origin. 0 generates all segments. Useful for exporting each segment to its own file
+segment_number = 0;
 
 /* [Stacked Print] */
 
@@ -279,6 +285,9 @@ assert(!magnets || magnet_frame_style != _MAGNET_SOLID || magnet_style != _MAGNE
 
 assert(!thumbscrews || solid_base > 0 || (magnets && magnet_frame_style == _MAGNET_SOLID), "Thumbscrew holes require some sort of solid base, such as magnet_style solid, or an explicit solid_base.");
 
+assert(!connector_symmetric || !connector_edge_puzzle, "connector_symmetric only supports the intersection puzzle connector, not the edge puzzle connector.");
+assert(!connector_symmetric || !separate_edge_padding, "connector_symmetric cannot be combined with separate_edge_padding.");
+assert(len(y_row_counts) == 0 || !separate_edge_padding, "y_row_counts cannot be combined with separate_edge_padding.");
 assert(!hollow || (!magnets && solid_base == 0 && !click), "Hollow mode only leaves a thin wall around the gridfinity profile, so there is nothing left to hold magnets, a solid base or a click latch.");
 
 assert(hollow_wall > 0, "hollow_wall must be positive.");
@@ -322,6 +331,8 @@ _VERTICAL_SCREW_STYLE_MAGNET = 1;
 
 // gap between segments in output
 _segment_gap = 10;
+// Debug: with segment_number, keep the segment at its position in the plate instead of centering it
+_segment_in_place = false;
 
 _NORTH = 0;
 _EAST = 1;
@@ -749,6 +760,37 @@ module navigate_edge(size, trace, padding, index, dir) {
     ]) children();
 }
 
+// Default connector directions: north and east edges are male, south and west edges are female
+_default_male_at = function (side, k) side == _NORTH || side == _EAST;
+
+module mirror_if(condition, v) {
+    if (condition) mirror(v) children(); else children();
+}
+
+/**
+ * @Summary Place one half of an intersection puzzle connector at a cell corner (2D)
+ * @param positive true if this is the positive pass
+ * @param side The segment side the connector is on
+ * @param extend The direction along the side in which this half extends from the corner
+ * @param male Whether this half is male
+ * @param max_depth Segment size perpendicular to the side, to shorten male connectors on narrow segments
+ */
+module puzzle_half(positive, side, extend, male, max_depth) {
+    if (side == _NORTH || side == _SOUTH) {
+        // reference orientation: male on the north side, female on the south side. Other combinations are mirrored.
+        mirror_if((side == _NORTH) != male, [0, 1]) {
+            if (male) mirror_if(extend == _WEST, [1, 0]) rotate([0, 0, 90]) puzzle_male(positive, max_depth);
+            else mirror_if(extend == _EAST, [1, 0]) rotate([0, 0, -90]) puzzle_female(positive);
+        }
+    } else {
+        // reference orientation: male on the east side, female on the west side. Other combinations are mirrored.
+        mirror_if((side == _EAST) != male, [1, 0]) {
+            if (male) mirror_if(extend == _NORTH, [0, 1]) puzzle_male(positive, max_depth);
+            else mirror_if(extend == _SOUTH, [0, 1]) rotate([0, 0, 180]) puzzle_female(positive);
+        }
+    }
+}
+
 /**
  * @Summary Draw the segment intersection connectors (2D)
  * @Details Draw all the segment connectors in 2D, once for the whole segment. 
@@ -760,32 +802,31 @@ module navigate_edge(size, trace, padding, index, dir) {
  * @param size The size of the segment (incl. padding)
  * @param padding The padding of the segment (for each edge)
  * @param connector The connector configuration (for each edge)
+ * @param male_at Function (side, k) returning whether the connector at point k (counted in cell corners from the south/west end) of the given side is male, or undef to leave it out
  */
-module segment_intersection_connectors(positive, trace, size, padding, connector) {
+module segment_intersection_connectors(positive, trace, size, padding, connector, male_at=_default_male_at) {
     last = [len(trace.x) - 1, len(trace.y) - 1];
     // for the normal case, we iterate over the cells at the edge of the segment, and add two half-connectors for each cell.
     for (ix = [0:1:last.x]) {
         // north and south connectors
         skip_first = ix == 0 && connector[_WEST];
         skip_last = ix == last.x && connector[_EAST];
-        if (connector[_SOUTH]) {
-            if (!skip_first) navigate_corner(size, trace, padding, [ix, 0], _SOUTH, _WEST) mirror([1, 0]) rotate([0, 0, -90]) puzzle_female(positive);
-            if (!skip_last) navigate_corner(size, trace, padding, [ix, 0], _SOUTH, _EAST) rotate([0, 0, -90]) puzzle_female(positive);
-        }
-        if (connector[_NORTH]) {
-            if (!skip_first) navigate_corner(size, trace, padding, [ix, last.y], _NORTH, _WEST) rotate([0, 0, 90]) puzzle_male(positive, size.y);
-            if (!skip_last) navigate_corner(size, trace, padding, [ix, last.y], _NORTH, _EAST) mirror([1, 0]) rotate([0, 0, 90]) puzzle_male(positive, size.y);
+        for (side = [_SOUTH, _NORTH]) if (connector[side]) {
+            iy = side == _SOUTH ? 0 : last.y;
+            male_first = male_at(side, ix);
+            male_last = male_at(side, ix + 1);
+            if (!skip_first && male_first != undef) navigate_corner(size, trace, padding, [ix, iy], side, _WEST) puzzle_half(positive, side, _EAST, male_first, size.y);
+            if (!skip_last && male_last != undef) navigate_corner(size, trace, padding, [ix, iy], side, _EAST) puzzle_half(positive, side, _WEST, male_last, size.y);
         }
     }
     for (iy = [0:1:last.y]) {
         // east and west connectors
-        if (connector[_WEST]) {
-            navigate_corner(size, trace, padding, [0, iy], _SOUTH, _WEST) rotate([0, 0, 180]) puzzle_female(positive);
-            navigate_corner(size, trace, padding, [0, iy], _NORTH, _WEST) mirror([0, 1]) rotate([0, 0, 180]) puzzle_female(positive);
-        }
-        if (connector[_EAST]) {
-            navigate_corner(size, trace, padding, [last.x, iy], _SOUTH, _EAST) mirror([0, 1]) puzzle_male(positive, size.x);
-            navigate_corner(size, trace, padding, [last.x, iy], _NORTH, _EAST) puzzle_male(positive, size.x);
+        for (side = [_WEST, _EAST]) if (connector[side]) {
+            ix = side == _WEST ? 0 : last.x;
+            male_south = male_at(side, iy);
+            male_north = male_at(side, iy + 1);
+            if (male_south != undef) navigate_corner(size, trace, padding, [ix, iy], _SOUTH, side) puzzle_half(positive, side, _NORTH, male_south, size.x);
+            if (male_north != undef) navigate_corner(size, trace, padding, [ix, iy], _NORTH, side) puzzle_half(positive, side, _SOUTH, male_north, size.x);
         }
     }
     // At the corners of the segment, we now only have half-connectors. But if we have padding, there may be space for a full connector after all.
@@ -804,26 +845,20 @@ module segment_intersection_connectors(positive, trace, size, padding, connector
     if (len(trace.x) > 0 || !positive) intersection() {
         translate([bounds_min.x, -size.y/2 - 20]) square([bounds_max.x - bounds_min.x, size.y + 40]);
         union() {
-            if (!connector[_WEST]) {
-                if (connector[_SOUTH]) navigate_corner(size, trace, padding, [0, 0], _SOUTH, _WEST) rotate([0, 0, -90]) puzzle_female(positive);
-                if (connector[_NORTH]) navigate_corner(size, trace, padding, [0, last.y], _NORTH, _WEST) mirror([1, 0]) rotate([0, 0, 90]) puzzle_male(positive, size.y);
-            }
-            if (!connector[_EAST]) {
-                if (connector[_SOUTH]) navigate_corner(size, trace, padding, [last.x, 0], _SOUTH, _EAST) mirror([1, 0]) rotate([0, 0, -90]) puzzle_female(positive);
-                if (connector[_NORTH]) navigate_corner(size, trace, padding, [last.x, last.y], _NORTH, _EAST) rotate([0, 0, 90]) puzzle_male(positive, size.y);
+            for (dirx = [_WEST, _EAST]) if (!connector[dirx]) for (side = [_SOUTH, _NORTH]) if (connector[side]) {
+                k = dirx == _WEST ? 0 : len(trace.x);
+                male = male_at(side, k);
+                if (male != undef) navigate_corner(size, trace, padding, [dirx == _WEST ? 0 : last.x, side == _SOUTH ? 0 : last.y], side, dirx) puzzle_half(positive, side, dirx, male, size.y);
             }
         }
     }
     if (len(trace.y) > 0 || !positive) intersection() {
         translate([-size.x/2 - 20, bounds_min.y]) square([size.x + 40, bounds_max.y - bounds_min.y]);
         union() {
-            if (!connector[_SOUTH]) {
-                if (connector[_WEST]) navigate_corner(size, trace, padding, [0, 0], _SOUTH, _WEST) mirror([0, 1]) rotate([0, 0, 180]) puzzle_female(positive);
-                if (connector[_EAST]) navigate_corner(size, trace, padding, [last.x, 0], _SOUTH, _EAST) puzzle_male(positive, size.x);
-            }
-            if (!connector[_NORTH]) {
-                if (connector[_WEST]) navigate_corner(size, trace, padding, [0, last.y], _NORTH, _WEST) rotate([0, 0, 180]) puzzle_female(positive);
-                if (connector[_EAST]) navigate_corner(size, trace, padding, [last.x, last.y], _NORTH, _EAST) mirror([0, 1]) puzzle_male(positive, size.x);
+            for (diry = [_SOUTH, _NORTH]) if (!connector[diry]) for (side = [_WEST, _EAST]) if (connector[side]) {
+                k = diry == _SOUTH ? 0 : len(trace.y);
+                male = male_at(side, k);
+                if (male != undef) navigate_corner(size, trace, padding, [side == _WEST ? 0 : last.x, diry == _SOUTH ? 0 : last.y], diry, side) puzzle_half(positive, side, diry, male, size.x);
             }
         }
     }
@@ -1141,7 +1176,7 @@ function cell_style(index, global_cell_index, global_cell_count) = let(
 /**
  * @Summary The union of the cell cores, clipped so the outer wall stays solid, the puzzle connectors keep hollow_connector_fill of material around them and the intersection holes stay surrounded by solid material
  */
-module segment_core(trace, size, padding, connector, global_cell_index, global_cell_count) {
+module segment_core(trace, size, padding, connector, global_cell_index, global_cell_count, male_at=_default_male_at) {
     last = [len(trace.x)-1, len(trace.y)-1];
     difference() {
         intersection() {
@@ -1160,8 +1195,8 @@ module segment_core(trace, size, padding, connector, global_cell_index, global_c
             translate([0, 0, -_extra_height]) linear_extrude(height = _total_height)
                 offset(hollow_connector_fill) {
                     if (connector_intersection_puzzle) {
-                        segment_intersection_connectors(true, trace, size, padding, connector);
-                        segment_intersection_connectors(false, trace, size, padding, connector);
+                        segment_intersection_connectors(true, trace, size, padding, connector, male_at);
+                        segment_intersection_connectors(false, trace, size, padding, connector, male_at);
                     }
                     if (connector_edge_puzzle) {
                         segment_edge_connectors(true, trace, size, padding, connector);
@@ -1182,8 +1217,9 @@ module segment_core(trace, size, padding, connector, global_cell_index, global_c
  * @param global_segment_index If applicable, the global index of this segment. This is used to emboss numbering
  * @param global_cell_index If applicable, the global cell index of this segment. This is used for vertical screws at plate corners
  * @param global_cell_count If applicable, the global cell count. This is used for vertical screws at plate corners
+ * @param male_at Connector direction function, see segment_intersection_connectors
  */
-module segment(trace=[[1], [1]], padding=[0, 0, 0, 0], connector=[false, false, false, false], global_segment_index=undef, global_cell_index=[0, 0], global_cell_count=[0, 0]) {
+module segment(trace=[[1], [1]], padding=[0, 0, 0, 0], connector=[false, false, false, false], global_segment_index=undef, global_cell_index=[0, 0], global_cell_count=[0, 0], male_at=_default_male_at) {
     size = compute_segment_size(trace, padding);
     _edge_puzzle_height_male = edge_puzzle_height_female - edge_puzzle_height_male_delta;
     // whether to cut the male edge puzzle connector to make room for the bin in the next cell. For really short connectors this is not necessary, but there's also no good reason to turn this off, so it's not user configurable at the moment
@@ -1196,7 +1232,7 @@ module segment(trace=[[1], [1]], padding=[0, 0, 0, 0], connector=[false, false, 
                     // basic plate with rounded corners
                     segment_rectangle(size, connector, include_wall=false);
                     if (connector_intersection_puzzle) {
-                        segment_intersection_connectors(false, trace, size, padding, connector);
+                        segment_intersection_connectors(false, trace, size, padding, connector, male_at);
                     }
                 }
                 union() {
@@ -1305,7 +1341,7 @@ module segment(trace=[[1], [1]], padding=[0, 0, 0, 0], connector=[false, false, 
 
             adapter(size, connector, negative=false);
             
-            if (connector_intersection_puzzle) translate([0, 0, -_extra_height]) linear_extrude(height = _total_height) segment_intersection_connectors(true, trace, size, padding, connector);
+            if (connector_intersection_puzzle) translate([0, 0, -_extra_height]) linear_extrude(height = _total_height) segment_intersection_connectors(true, trace, size, padding, connector, male_at);
             if (connector_edge_puzzle) {
                 intersection() {
                     translate([0, 0, -_extra_height]) linear_extrude(height = _extra_height+_edge_puzzle_height_male) segment_edge_connectors(true, trace, size, padding, connector);
@@ -1356,7 +1392,7 @@ module segment(trace=[[1], [1]], padding=[0, 0, 0, 0], connector=[false, false, 
         translate([-size.x/2, 0]) rotate([0, 0, 90]) horizontal_screws(_WEST, padding, trace = trace.y, connector = connector);
         translate([size.x/2, 0]) rotate([0, 0, -90]) horizontal_screws(_EAST, padding, trace = trace.y, connector = connector);
 
-        if (hollow) segment_core(trace, size, padding, connector, global_cell_index, global_cell_count);
+        if (hollow) segment_core(trace, size, padding, connector, global_cell_index, global_cell_count, male_at);
     }
 }
 
@@ -1599,7 +1635,16 @@ module main() {
         plan_axis_ideal(global_trace.x, bed_norm=bed_norm.x, start_padding_norm=start_padding_norm.x, end_padding_norm=end_padding_norm.x) :
         vars_to_incremental(global_trace.x, plan_axis_incremental_vars(global_trace.x, bed_norm=bed_norm.x, start_padding_norm=start_padding_norm.x, end_padding_norm=end_padding_norm.x, force_first=x_column_count_first == 0 ? undef : x_column_count_first), start_padding_norm.x, end_padding_norm.x);
     // for the y axis, we need to avoid 4-way gap intersections, so we need two plans.
-    plans_y = plan_axis_staggered(global_trace.y, bed_norm=bed_norm.y, start_padding_norm=start_padding_norm.y, end_padding_norm=end_padding_norm.y);
+    plans_y = len(y_row_counts) > 0 ? [y_row_counts, reverse(y_row_counts)] : plan_axis_staggered(global_trace.y, bed_norm=bed_norm.y, start_padding_norm=start_padding_norm.y, end_padding_norm=end_padding_norm.y);
+    if (len(y_row_counts) > 0) {
+        assert(sum(y_row_counts) == len(global_trace.y), str("y_row_counts must add up to the number of rows (", len(global_trace.y), ")"));
+        y_row_counts_cumulate = cumulate(y_row_counts);
+        for (i = [0:len(y_row_counts) - 1]) {
+            segment_norm = global_trace_cumulated.y[y_row_counts_cumulate[i + 1]] - global_trace_cumulated.y[y_row_counts_cumulate[i]]
+                + (i == 0 || i == len(y_row_counts) - 1 ? max(start_padding_norm.y, end_padding_norm.y) : 0);
+            assert(segment_norm <= bed_norm.y, str("y_row_counts: a segment with ", y_row_counts[i], " rows does not fit on the bed"));
+        }
+    }
     plans_y_cumulate = [for (p = plans_y) cumulate(p)];
     plan_x_cumulate = cumulate(plan_x);
 
@@ -1667,7 +1712,45 @@ module main() {
         total_height_ceil * zi
     ];
 
-    all_segments = [for (segix = [0:len(plan_x) - 1]) for (segiy = [0:len(get_plan_y(segix)) - 1]) [segix, segiy]];
+    /*
+     * @Summary Connector direction function for a segment (see segment_intersection_connectors).
+     * @Details With connector_symmetric, the direction of every connector flips when the plate is rotated by 180°, so that
+     *          segments that are rotated copies of each other come out identical. At T-junctions, the segment that runs
+     *          through the junction is male. Elsewhere, the direction depends on which side of the plate center the
+     *          connector is on. A connector exactly at the plate center is left out.
+     */
+    function compute_male_at(segi) = !connector_symmetric ? _default_male_at : let(
+        plan_y_cumulate = get_plan_y_cumulate(segi.x),
+        center = [global_trace_cumulated.x[len(global_trace.x)] / 2, global_trace_cumulated.y[len(global_trace.y)] / 2],
+        x_range = [plan_x_cumulate[segi.x], plan_x_cumulate[segi.x + 1]],
+        y_range = [plan_y_cumulate[segi.y], plan_y_cumulate[segi.y + 1]],
+        // cell indices at which a column is split into segments
+        is_split = function (segix, celly) let(c = get_plan_y_cumulate(segix)) len([for (i = [1:1:len(c) - 2]) if (c[i] == celly) 1]) > 0,
+        // sign of the offset of a point from the center, comparing first along `primary` and then along the other axis. 0 at the center
+        side_of_center = function (pos, primary) let(
+            a = pos[primary] - center[primary],
+            b = pos[1 - primary] - center[1 - primary]
+        ) a != 0 ? sign(a) : sign(b)
+    ) function (side, k) let(
+        vertical_seam = side == _EAST || side == _WEST,
+        celly = vertical_seam ? y_range[0] + k : (side == _NORTH ? y_range[1] : y_range[0]),
+        cellx = vertical_seam ? (side == _EAST ? x_range[1] : x_range[0]) : x_range[0] + k,
+        pos = [global_trace_cumulated.x[cellx], global_trace_cumulated.y[celly]],
+        own_split = vertical_seam && is_split(segi.x, celly),
+        neighbor_split = vertical_seam && is_split(segi.x + (side == _EAST ? 1 : -1), celly),
+        // for vertical seams: is the west segment male? for horizontal seams: is the south segment male?
+        lower_side_male = side_of_center(pos, vertical_seam ? 1 : 0) < 0,
+        on_center = side_of_center(pos, 0) == 0
+    )
+        own_split != neighbor_split ? !own_split :
+        on_center ? undef :
+        (side == _EAST || side == _NORTH) ? lower_side_male : !lower_side_male;
+
+    function compute_global_segment_index(segi) = segi.y + ceil(segi.x / 2) * len(plans_y[0]) + floor(segi.x / 2) * len(plans_y[1]);
+
+    all_segments_unfiltered = [for (segix = [0:len(plan_x) - 1]) for (segiy = [0:len(get_plan_y(segix)) - 1]) [segix, segiy]];
+    assert(segment_number <= len(all_segments_unfiltered), str("segment_number ", segment_number, " does not exist, the plate only has ", len(all_segments_unfiltered), " segments"));
+    all_segments = [for (segi = all_segments_unfiltered) if (segment_number <= 0 || compute_global_segment_index(segi) == segment_number - 1) segi];
     segments_in_order = stacked_print ? quicksort(all_segments, lte=function (a, b) compute_segment_area(a) >= compute_segment_area(b)) : all_segments;
 
     duplicates = stacked_print ? stacked_print_duplicates : 1;
@@ -1680,7 +1763,7 @@ module main() {
             stacked_print && (i == 0 ? stacked_print_flip_first : stacked_print_flip) == _FLIP_Y
         ];
         
-        translate(stacked_print ? compute_segment_position_stacked(i, segi, flip) : compute_segment_position_standard(segi)) flip_segment_conditional(flip) segment(trace=[
+        translate(stacked_print ? compute_segment_position_stacked(i, segi, flip) : segment_number > 0 && !_segment_in_place ? [0, 0] : compute_segment_position_standard(segi)) flip_segment_conditional(flip) segment(trace=[
             slice(global_trace.x, plan_x_cumulate[segi.x], plan_x[segi.x]),
             slice(global_trace.y, plan_y_cumulate[segi.y], plan_y[segi.y])
         ], padding=compute_segment_padding(segi), connector=[
@@ -1688,9 +1771,10 @@ module main() {
             segi.x != len(plan_x) - 1,
             segi.y != 0,
             segi.x != 0
-        ], global_segment_index=segi.y + ceil(segi.x / 2) * len(plans_y[0]) + floor(segi.x / 2) * len(plans_y[1]),
+        ], global_segment_index=compute_global_segment_index(segi),
         global_cell_index=[sum_sub_vector(plan_x, segi.x), sum_sub_vector(plan_y, segi.y)],
-        global_cell_count=[len(global_trace.x), len(global_trace.y)]);
+        global_cell_count=[len(global_trace.x), len(global_trace.y)],
+        male_at=compute_male_at(segi));
     }
 }
 
